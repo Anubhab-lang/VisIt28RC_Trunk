@@ -553,7 +553,11 @@ public:
                                const stringVector &args, void *data);
 
     void AddNewViewerClientConnection(ViewerClientConnection* newClient);
-    void BroadcastAdvanced(int windowId, bool inMotion);
+    /// Experimental Web Client Stuff
+    //void BroadcastAdvanced(int windowId, bool inMotion);
+    void BroadcastImage(int windowId, bool inMotion);
+    void BroadcastData(int windowId, int clientId);
+    
 
 public slots:
     void ProcessFromParent();
@@ -724,8 +728,7 @@ private:
 
     void SetDefaultFileOpenOptions();
     void SetSuppressMessages();
-    //void BroadcastAdvanced(AttributeSubject *subj);
-
+    
     void DDTFocus();
     void DDTConnect();
         

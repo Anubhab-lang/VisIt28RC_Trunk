@@ -397,25 +397,42 @@ void SharedDaemon::handleConnection()
     }
 
     /// advanced rendering can be true or false (image only), or string none,image,data
-    if(jo.count("canRender") == 0)
+    if(jo.count("canRender") == 0) {
         clientAtts.SetRenderingType(ViewerClientAttributes::None);
+        clientAtts.GetRenderingTypes().push_back(ViewerClientAttributes::None);
+    }
     else
     {
         const JSONNode& node = jo["canRender"];
+        QString type = node.GetString().c_str();
+        type = type.toLower();
 
         /// TODO: remove the boolean check and make all current clients comply..
-        if(node.GetType() == JSONNode::JSONBOOL)
+        if(node.GetType() == JSONNode::JSONBOOL) {
             clientAtts.SetRenderingType( node.GetBool() ? ViewerClientAttributes::Image :
                                                           ViewerClientAttributes::None);
+            clientAtts.GetRenderingTypes().push_back(node.GetBool() ? ViewerClientAttributes::Image :
+                                                                      ViewerClientAttributes::None);
+        }
         else if(node.GetType() == JSONNode::JSONSTRING)
         {
-            if(node.GetString() == "image") clientAtts.SetRenderingType(ViewerClientAttributes::Image);
-            else if(node.GetString() == "data") clientAtts.SetRenderingType(ViewerClientAttributes::Data);
-            else clientAtts.SetRenderingType(ViewerClientAttributes::None);
+            if(type == "image") {
+                clientAtts.SetRenderingType(ViewerClientAttributes::Image);
+                clientAtts.GetRenderingTypes().push_back((int)ViewerClientAttributes::Image);
+            }
+            else if(type == "data") {
+                clientAtts.SetRenderingType(ViewerClientAttributes::Data);
+                clientAtts.GetRenderingTypes().push_back((int)ViewerClientAttributes::Data);
+            }
+            else {
+                clientAtts.SetRenderingType(ViewerClientAttributes::None);
+                clientAtts.GetRenderingTypes().push_back((int)ViewerClientAttributes::None);
+            }
         }
         else
         {
             clientAtts.SetRenderingType(ViewerClientAttributes::None);
+            clientAtts.GetRenderingTypes().push_back((int)ViewerClientAttributes::None);
         }
     }
     stringVector args;

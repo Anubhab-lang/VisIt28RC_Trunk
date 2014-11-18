@@ -313,6 +313,7 @@ ViewerClientConnection::LaunchClient(const std::string &program,
 
             if(conn) {
                 connect(conn, SIGNAL(activated(int)), this, SLOT(ReadFromClientAndProcess(int)));
+                connect(conn, SIGNAL(disconnected()), this, SLOT(ForceDisconnectClient()));
             }
             else {
                 notifier = new QSocketNotifier(desc, QSocketNotifier::Read, 0);

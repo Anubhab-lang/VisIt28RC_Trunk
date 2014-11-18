@@ -185,6 +185,7 @@ private:
     std::vector<QString> messages;
 signals:
     void activated(int);
+    void disconnected();
 };
 
 #endif

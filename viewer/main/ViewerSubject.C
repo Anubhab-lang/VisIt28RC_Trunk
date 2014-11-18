@@ -62,6 +62,7 @@
 #include <ClientMethod.h>
 #include <ClientInformation.h>
 #include <ClientInformationList.h>
+#include <ColorControlPoint.h>
 #include <ColorControlPointList.h>
 #include <ColorTableAttributes.h>
 #include <ConstructDataBinningAttributes.h>
@@ -117,7 +118,7 @@
 #include <VariableMenuPopulator.h>
 #include <ViewerRPC.h>
 #include <Xfer.h>
-
+#include <View3DAttributes.h>
 #include <ViewerActionBase.h>
 #include <ViewerActionManager.h>
 #include <ViewerConnectionProgressDialog.h>
@@ -450,12 +451,6 @@ ViewerSubject::AddNewViewerClientConnection(ViewerClientConnection* newClient)
     newClient->GetViewerClientAttributes().SetId((int)clients.size());
 
     clients.push_back(newClient);
-
-//    if(newClient->GetViewerClientAttributes().GetRenderingType() == ViewerClientAttributes::Image)
-//        BroadcastAdvanced(GetViewerState()->GetView3DAttributes());
-
-//    if(newClient->GetViewerClientAttributes().GetRenderingType() == ViewerClientAttributes::Data)
-//        BroadcastAdvanced(0);
 
     // Discover the client's information.
     QTimer::singleShot(100, this, SLOT(DiscoverClientInformation()));
@@ -1317,9 +1312,11 @@ ViewerSubject::DisconnectClient(ViewerClientConnection *client)
         ViewerClientConnectionVector::iterator pos = std::find(clients.begin(),
             clients.end(), client);
 
-        ViewerClientConnectionVector::iterator next = pos + 1;
-        if(pos != clients.end())
-            clients.erase(pos);
+        std::cout << "disconnecting client" << pos - clients.begin() << std::endl;
+        ViewerClientConnectionVector::iterator next = clients.end();
+        if(pos != clients.end()) {
+            next = clients.erase(pos);
+        }
 
         /// TODO: update client ids (verify)
         for(; next != clients.end(); ++next) {
@@ -3627,7 +3624,7 @@ void GetSerializedData(int windowIndex,
             else if(reader->InputIsDataset())
             {
                 avtDataset_p dataset = reader->GetDatasetOutput();
-                std::string res = dataset->GetDatasetAsString();
+                std::string res = dataset->GetDatasetAsString("GeoJSON");
 
                 if(res.size() > 0) {
                     QByteArray data(res.c_str(),(int)res.size());
@@ -3883,11 +3880,20 @@ ViewerSubject::Export()
 
     if(action == "RegisterNewWindow") {
         int windowId = node["windowId"].GetInt();
+        std::string typeMap = node["type"].ToString();
+        std::cout << typeMap << std::endl;
+        int type = (int)ViewerClientAttributes::None;
+        if(typeMap == "Image" || typeMap == "\"Image\"") {
+            type = (int)ViewerClientAttributes::Image;
+        } else if(typeMap == "Data"|| typeMap == "\"Data\""){
+            type = (int)ViewerClientAttributes::Data;
+        }
 
         if(clientId >= 0 && clientId < clients.size()) {
             ViewerClientConnection* conn = clients[clientId];
 
             intVector& activeWindows = conn->GetViewerClientAttributes().GetWindowIds();
+            intVector& typeWindows = conn->GetViewerClientAttributes().GetRenderingTypes();
             int index = -1;
             for(size_t i = 0; i < activeWindows.size(); ++i) {
                 if(activeWindows[i] == windowId) {
@@ -3896,19 +3902,69 @@ ViewerSubject::Export()
                 }
             }
             std::cout << "registering new window for clientId " << activeWindows.size() << " "
-                      << clientId << " " << index << "  " << " " << windowId << std::endl;
+                      << clientId << " " << index << "  " << " " << windowId << " " << type << std::endl;
             if(index == -1) {
                 activeWindows.push_back(windowId);
+                typeWindows.push_back(type);
             }
         }
 
         /// activeWindows are 1-based but internal windows are 0-based
         /// really confusing :)
-        BroadcastAdvanced(windowId-1, false);
+        BroadcastImage(windowId-1, false);
+        BroadcastData(windowId-1, clientId);
     }
 
+    if(action == "ColorTable") {
+
+        std::string name = node["name"].GetString();
+        intVector red = node["red"].AsIntVector();
+        intVector green = node["green"].AsIntVector();;
+        intVector blue = node["blue"].AsIntVector();;
+        intVector alpha = node["alpha"].AsIntVector();
+        intVector pcnt = node["pcnt"].AsIntVector();
+
+        std::cout << "creating colormap: " << node.ToString() << std::endl;
+
+        ColorTableAttributes* ctAtts = GetViewerState()->GetColorTableAttributes();
+
+        ColorControlPointList ccpl;
+
+
+        for(size_t i = 0; i <  pcnt.size(); ++i) {
+            int scaled = pcnt[i];
+
+            ColorControlPoint p;
+
+            float r = float(scaled-red[0])/float(red[1]-red[0]);
+
+            float g = float(scaled-green[0])/float(green[1]-green[0]);
+
+            float b = float(scaled-blue[0])/float(blue[1]-blue[0]);
+
+            float a = float(scaled-alpha[0])/float(alpha[1]-alpha[0]);
+
+            r = r > 1.0f ? 0.0f : std::min(std::max(0.0f,r),1.0f);
+            g = g > 1.0f ? 0.0f : std::min(std::max(0.0f,g),1.0f);
+            b = b > 1.0f ? 0.0f : std::min(std::max(0.0f,b),1.0f);
+            a = std::min(std::max(0.0f,a),1.0f);
+
+            unsigned char colors[4];
+            colors[0] = (unsigned char) r*255;
+            colors[1] = (unsigned char) g*255;
+            colors[2] = (unsigned char) b*255;
+            colors[3] = (unsigned char) a*255;
+            p.SetColors(colors);
+
+            float position = float(position)/255.0f;
+            p.SetPosition(position);
+            ccpl.AddControlPoints(p);
+        }
+
+        ctAtts->AddColorTable(name,ccpl);
+    }
     if(action == "UpdateMouseActions") {
-        int windowId = node["windowId"].GetInt();
+        int windowId = node["windowId"].GetInt()-1;
         std::string button = node["mouseButton"].GetString();
 
         double start_dx = node["start_dx"].GetDouble();
@@ -3919,32 +3975,42 @@ ViewerSubject::Export()
         bool shift = node["shift"].GetBool();
 
         //// start_dx, start_dy, end_dx, end_dy are percentages in x and y...
-        ViewerWindow* win = ViewerWindowManager::Instance()->GetWindow(windowId-1);
+        ViewerWindow* win = ViewerWindowManager::Instance()->GetWindow(windowId);
 
         if(!win) {
             ///TODO: exception...
-            std::cerr << "window " << windowId << " does not exist" << std::endl;
+            std::cerr << "window " << windowId+1 << " does not exist" << std::endl;
             return;
         }
 
-        win->UpdateMouseActions(button,
-                                start_dx, start_dy,
-                                end_dx, end_dy,
-                                ctrl, shift);
+        std::cout << "button action: " << button << std::endl;
+        if(button == "Pan") {
+            avtView3D v = win->GetView3D();
+            v.imagePan[0] = start_dx;
+            v.imagePan[1] = start_dy;
+            win->SetView3D(v);
+        }
+        else {
+            win->UpdateMouseActions(button,
+                                    start_dx, start_dy,
+                                    end_dx, end_dy,
+                                    ctrl, shift);
+        }
     }
 
     if(action == "ForceRedraw") {
-        int windowId = node["windowId"].GetInt();
-        ViewerWindow* win = ViewerWindowManager::Instance()->GetWindow(windowId-1);
+        int windowId = node["windowId"].GetInt()-1;
+        ViewerWindow* win = ViewerWindowManager::Instance()->GetWindow(windowId);
 
         if(!win) {
-            std::cerr << "Invalid Window " << windowId << " Selected";
+            std::cerr << "Invalid Window " << windowId+1 << " Selected";
             return;
         }
 
         win->ClearWindow(false);
         win->GetPlotList()->RealizePlots(false);
-        BroadcastAdvanced(windowId-1, false);
+        BroadcastImage(windowId, false);
+        BroadcastData(windowId, clientId);
     }
 }
 
@@ -9148,8 +9214,6 @@ ViewerSubject::HandleViewerRPCEx()
     // We need to do this until all items in the switch statement are
     // removed and converted to actions.
     //
-//    if(GetViewerState()->GetViewerRPC()->GetRPCType() == ViewerRPC::DrawPlotsRPC)
-//        BroadcastAdvanced(0);
     if (everythingOK && !actionHandled)
         ViewerWindowManager::Instance()->UpdateActions();
 
@@ -9165,310 +9229,66 @@ ViewerSubject::HandleViewerRPCEx()
 }
 
 
-//void
-//ViewerSubject::BroadcastAdvanced(AttributeSubject* subj)
-//{
-//    /// check if any clients have enabled advanced broadcasting before even
-//    /// starting..
-
-//    bool shouldBroadCastAdvancedImage = false;
-//    bool shouldBroadCastAdvancedData = false;
-
-//    for(size_t i = 0; i < clients.size(); ++i)
-//    {
-//        if(clients[i]->GetViewerClientAttributes().GetRenderingType() == ViewerClientAttributes::Image)
-//            shouldBroadCastAdvancedImage = true;
-//        if(clients[i]->GetViewerClientAttributes().GetRenderingType() == ViewerClientAttributes::Data)
-//            shouldBroadCastAdvancedData = true;
-//    }
-
-//    if(!shouldBroadCastAdvancedImage && !shouldBroadCastAdvancedData) return;
-
-//    typedef std::vector<ViewerClientInformationElement> ViewerClientInformationElementList;
-//    std::map<std::string, ViewerClientInformationElementList> geometryElementMap;
-
-//    ViewerWindowManager* manager = ViewerWindowManager::Instance();
-
-//    for(size_t x = 0; x < clients.size(); ++x)
-//    {
-//        const ViewerClientAttributes& clatts = clients[x]->GetViewerClientAttributes();
-
-//        if(clatts.GetRenderingType() == ViewerClientAttributes::None)
-//            continue;
-
-//        intVector activeWindows = clatts.GetWindowIds();
-
-//        /// in case the user forgot to request a window
-//        /// default to sending active window..
-
-//        if(activeWindows.size() == 0)
-//            activeWindows.push_back(manager->GetActiveWindow()->GetWindowId()+1);
-
-////        for(size_t i = 0; i < activeWindows.size(); ++i) {
-////            std::cout << "active windows : clients" << x << " " << activeWindows[i] << std::endl;
-////        }
-
-//        if(activeWindows.size() == 0)
-//            activeWindows.push_back(manager->GetActiveWindow()->GetWindowId()+1);
-
-//        if(     clatts.GetRenderingType() == ViewerClientAttributes::Image &&
-//                (subj == GetViewerState()->GetView2DAttributes() ||
-//                subj == GetViewerState()->GetView3DAttributes()))
-//        {
-
-//            /// for now do screen capture, until all clients are stable
-//            for(int i = 0; i < manager->GetNumWindows(); ++i)
-//            {
-//                ViewerWindow* vwin = manager->GetWindow(i);
-
-//                bool match = false;
-//                for(size_t j = 0; j < activeWindows.size(); ++j)
-//                {
-//                    if(activeWindows[j] == vwin->GetWindowId()+1)
-//                    {
-//                        match = true;
-//                        break;
-//                    }
-//                }
-
-//                if(!match) continue;
-
-
-//                QString qdim = QString("%1x%2x%3_%4").arg(clatts.GetImageWidth())
-//                                                  .arg(clatts.GetImageHeight())
-//                                                  .arg(vwin->GetWindowId()+1)
-//                                                  .arg((int)clatts.GetRenderingType());
-
-//                std::string dimensions = qdim.toStdString();
-
-//                if(geometryElementMap.count(dimensions) > 0) continue;
-
-//                //int timerId = visitTimer->StartTimer(true);
-//                GetSerializedData(i,
-//                                  clatts.GetImageWidth(),
-//                                  clatts.GetImageHeight(),
-//                                  clatts.GetImageResolutionPcnt(),
-//                                  ViewerClientInformation::Image,
-//                                  geometryElementMap[dimensions]);
-//            }
-//        }
-
-//        if( clatts.GetRenderingType() == ViewerClientAttributes::Data && subj == NULL)
-//        {
-//            /// for now do screen capture, until all clients are stable
-//            for(int i = 0; i < manager->GetNumWindows(); ++i)
-//            {
-//                ViewerWindow* vwin = manager->GetWindow(i);
-
-//                bool match = false;
-//                for(size_t j = 0; j < activeWindows.size(); ++j)
-//                {
-//                    if(activeWindows[j] == vwin->GetWindowId()+1)
-//                    {
-//                        match = true;
-//                        break;
-//                    }
-//                }
-
-//                if(!match) continue;
-
-
-//                QString qdim = QString("%1x%2x%3_%4").arg(clatts.GetImageWidth())
-//                                                  .arg(clatts.GetImageHeight())
-//                                                  .arg(vwin->GetWindowId()+1)
-//                                                  .arg((int)clatts.GetRenderingType());
-//                std::string dimensions = qdim.toStdString();
-
-//                if(geometryElementMap.count(dimensions) > 0) continue;
-
-//                /// get dataset..
-//                ViewerPlotList *plotList = vwin->GetPlotList();
-
-//                if(plotList->GetNumRealizedPlots() == 0 || plotList->GetNumVisiblePlots() == 0)
-//                     continue;
-
-//                GetSerializedData(i,
-//                                  clatts.GetImageWidth(),
-//                                  clatts.GetImageHeight(),
-//                                  clatts.GetImageResolutionPcnt(),
-//                                  ViewerClientInformation::Data,
-//                                  geometryElementMap[dimensions]);
-//            }
-
-//        }
-//    }
-
-
-//    /// if no data to transmit then immediately return..
-//    if(geometryElementMap.size() == 0) return;
-
-//    ViewerClientInformation* qatts = GetViewerState()->GetViewerClientInformation();
-
-//    /// I am clearing memory through the ClearVars() operations..
-//    for(size_t i = 0; i < clients.size(); ++i)
-//    {
-//        ViewerClientAttributes& clatts = clients[i]->GetViewerClientAttributes();
-
-//        if(clatts.GetRenderingType() == ViewerClientAttributes::None)
-//            continue;
-
-//        intVector activeWindows = clatts.GetWindowIds();
-
-//        if(activeWindows.size() == 0)
-//            activeWindows.push_back(manager->GetActiveWindow()->GetWindowId()+1);
-
-//        if(clatts.GetRenderingType() == ViewerClientAttributes::Data ||
-//           clatts.GetRenderingType() == ViewerClientAttributes::Image)
-//        {
-//            for(size_t j = 0; j < activeWindows.size(); ++j)
-//            {
-//                QString qdim = QString("%1x%2x%3_%4").arg(clatts.GetImageWidth())
-//                                                                 .arg(clatts.GetImageHeight())
-//                                                                 .arg(activeWindows[j])
-//                                                                 .arg((int)clatts.GetRenderingType());
-//                std::string dimensions = qdim.toStdString();
-
-//                if(geometryElementMap.count(dimensions) == 0) continue;
-
-//                qatts->ClearVars();
-
-//                ViewerClientInformationElementList& elementList = geometryElementMap[dimensions];
-//                for(size_t k = 0; k < elementList.size(); ++k) {
-//                    qatts->AddVars(elementList[k]);
-//                }
-//                clients[i]->BroadcastToClient(qatts);
-//            }
-//        }
-//    }
-
-////    static bool first = true;
-////    static int index = -1;
-////    if(!first && (geometryImageMap.size() > 0 || geometryDataMap.size() > 0))
-////    {
-////        double timeSinceLastCall = visitTimer->StopTimer(index,"BroadcastAdvanceUpdate", true);
-////        std::cout << "update: " << timeSinceLastCall << std::endl;
-////        index = visitTimer->StartTimer(true);
-////    }
-
-////    if(first)
-////    {
-////        index = visitTimer->StartTimer(true);
-////        first = false;
-////    }
-
-//    /// save memory..
-//    qatts->ClearVars();
-//}
-
-
 void
-ViewerSubject::BroadcastAdvanced(int windowId, bool inMotion)
+ViewerSubject::BroadcastData(int windowId, int clientId)
 {
-    /// for now do not update while render update is in motion..
-    if(inMotion)
-        return;
-
-     /// check if any clients have enabled advanced broadcasting before even
+    /// check if any clients have enabled advanced broadcasting before even
     /// starting..
 
-    bool shouldBroadCastAdvancedImage = false;
-    bool shouldBroadCastAdvancedData = false;
+    ViewerClientConnectionVector activeClients;
 
-    for(size_t i = 0; i < clients.size(); ++i)
+    //for(size_t i = 0; i < clients.size(); ++i)
+    size_t i = clientId;
     {
-        if(clients[i]->GetViewerClientAttributes().GetRenderingType() == ViewerClientAttributes::Image)
-            shouldBroadCastAdvancedImage = true;
-        if(clients[i]->GetViewerClientAttributes().GetRenderingType() == ViewerClientAttributes::Data)
-            shouldBroadCastAdvancedData = true;
+        ViewerClientAttributes& clatts = clients[i]->GetViewerClientAttributes();
+        const intVector& activeWindows = clatts.GetWindowIds();
+        const intVector& typeWindows = clatts.GetRenderingTypes();
+
+        for(size_t j = 0; j < activeWindows.size(); ++j) {
+            std::cout << activeWindows[j] << " " << typeWindows[j] << std::endl;
+            if(activeWindows[j] == windowId+1 &&
+              (ViewerClientAttributes::RenderType)typeWindows[j] == ViewerClientAttributes::Data) {
+                activeClients.push_back(clients[i]);
+            }
+        }
     }
 
-    if(!shouldBroadCastAdvancedImage && !shouldBroadCastAdvancedData) return;
+    if(activeClients.size() == 0) return;
 
     typedef std::vector<ViewerClientInformationElement> ViewerClientInformationElementList;
     std::map<std::string, ViewerClientInformationElementList> geometryElementMap;
 
     ViewerWindowManager* manager = ViewerWindowManager::Instance();
 
-    ViewerClientConnectionVector activeClients;
-
-    for(size_t x = 0; x < clients.size(); ++x)
-    {
-        const ViewerClientAttributes& clatts = clients[x]->GetViewerClientAttributes();
-
-        if(clatts.GetRenderingType() == ViewerClientAttributes::None)
-            continue;
-
-        intVector activeWindows = clatts.GetWindowIds();
-
-        for(size_t j = 0; j < activeWindows.size(); ++j)
-        {
-            /// activeWindows are 1-based whereas windowId is 0-based
-            if(activeWindows[j] == windowId+1)
-            {
-                activeClients.push_back(clients[x]);
-                break;
-            }
-        }
-    }
-
     for(size_t x = 0; x < activeClients.size(); ++x)
     {
         const ViewerClientAttributes& clatts = activeClients[x]->GetViewerClientAttributes();
 
         /// otherwise check if it needs transmission in
-        if( clatts.GetRenderingType() == ViewerClientAttributes::Image )
-        {
-            /// for now do screen capture, until all clients are stable
-            ViewerWindow* vwin = manager->GetWindow(windowId);
 
-            QString qdim = QString("%1x%2x%3_%4").arg(clatts.GetImageWidth())
-                                              .arg(clatts.GetImageHeight())
-                                              .arg(windowId)
-                                              .arg((int)clatts.GetRenderingType());
+        /// for now do screen capture, until all clients are stable
+        ViewerWindow* vwin = manager->GetWindow(windowId);
 
-            std::string dimensions = qdim.toStdString();
+        QString qdim = QString("%1x%2").arg(clatts.GetImageWidth())
+                .arg(clatts.GetImageHeight());
+        std::string dimensions = qdim.toStdString();
 
-            /// if this particular version already exists then skip it..
-            if(geometryElementMap.count(dimensions) > 0) continue;
+        /// if this particular version already exists then skip it..
+        if(geometryElementMap.count(dimensions) > 0) continue;
 
-            //int timerId = visitTimer->StartTimer(true);
-            GetSerializedData(windowId,
-                              clatts.GetImageWidth(),
-                              clatts.GetImageHeight(),
-                              clatts.GetImageResolutionPcnt(),
-                              ViewerClientInformation::Image,
-                              geometryElementMap[dimensions]);
-        }
+        /// get dataset..
+        ViewerPlotList *plotList = vwin->GetPlotList();
 
-        if( clatts.GetRenderingType() == ViewerClientAttributes::Data )
-        {
-            /// for now do screen capture, until all clients are stable
-            ViewerWindow* vwin = manager->GetWindow(windowId);
+        if(plotList->GetNumRealizedPlots() == 0 || plotList->GetNumVisiblePlots() == 0)
+            continue;
 
-            QString qdim = QString("%1x%2x%3_%4").arg(clatts.GetImageWidth())
-                                              .arg(clatts.GetImageHeight())
-                                              .arg(windowId)
-                                              .arg((int)clatts.GetRenderingType());
-            std::string dimensions = qdim.toStdString();
-
-            /// if this particular version already exists then skip it..
-            if(geometryElementMap.count(dimensions) > 0) continue;
-
-            /// get dataset..
-            ViewerPlotList *plotList = vwin->GetPlotList();
-
-            if(plotList->GetNumRealizedPlots() == 0 || plotList->GetNumVisiblePlots() == 0)
-                 continue;
-
-            GetSerializedData(windowId,
-                              clatts.GetImageWidth(),
-                              clatts.GetImageHeight(),
-                              clatts.GetImageResolutionPcnt(),
-                              ViewerClientInformation::Data,
-                              geometryElementMap[dimensions]);
-        }
+        GetSerializedData(windowId,
+                          clatts.GetImageWidth(),
+                          clatts.GetImageHeight(),
+                          clatts.GetImageResolutionPcnt(),
+                          ViewerClientInformation::Data,
+                          geometryElementMap[dimensions]);
     }
-
 
     /// if no data to transmit then immediately return..
     if(geometryElementMap.size() == 0) return;
@@ -9478,12 +9298,10 @@ ViewerSubject::BroadcastAdvanced(int windowId, bool inMotion)
     /// I am clearing memory through the ClearVars() operations..
     for(size_t i = 0; i < activeClients.size(); ++i)
     {
-        const ViewerClientAttributes& clatts = activeClients[i]->GetViewerClientAttributes();
+        ViewerClientAttributes& clatts = activeClients[i]->GetViewerClientAttributes();
 
-        QString qdim = QString("%1x%2x%3_%4").arg(clatts.GetImageWidth())
-                .arg(clatts.GetImageHeight())
-                .arg(windowId)
-                .arg((int)clatts.GetRenderingType());
+        QString qdim = QString("%1x%2").arg(clatts.GetImageWidth())
+                .arg(clatts.GetImageHeight());
 
         std::string dimensions = qdim.toStdString();
 
@@ -9492,11 +9310,93 @@ ViewerSubject::BroadcastAdvanced(int windowId, bool inMotion)
         qatts->ClearVars();
 
         ViewerClientInformationElementList& elementList = geometryElementMap[dimensions];
-
         for(size_t k = 0; k < elementList.size(); ++k) {
             qatts->AddVars(elementList[k]);
         }
+        std::cout << "broadcasting data" << std::endl;
+        activeClients[i]->BroadcastToClient(qatts);
+    }
 
+    /// save memory..
+    qatts->ClearVars();
+}
+
+void
+ViewerSubject::BroadcastImage(int windowId, bool inMotion)
+{
+    /// for now do not update while render update is in motion..
+    if(inMotion)
+        return;
+
+    /// check if any clients have enabled advanced broadcasting before even
+    /// starting..
+
+    ViewerClientConnectionVector activeClients;
+
+    for(size_t i = 0; i < clients.size(); ++i)
+    {
+        ViewerClientAttributes& clatts = clients[i]->GetViewerClientAttributes();
+        const intVector& activeWindows = clatts.GetWindowIds();
+        const intVector& typeWindows = clatts.GetRenderingTypes();
+
+        for(size_t j = 0; j < activeWindows.size(); ++j) {
+            if(activeWindows[j] == windowId+1 &&
+              (ViewerClientAttributes::RenderType)typeWindows[j] == ViewerClientAttributes::Image) {
+                activeClients.push_back(clients[i]);
+            }
+        }
+    }
+
+    if(activeClients.size() == 0) return;
+
+    typedef std::vector<ViewerClientInformationElement> ViewerClientInformationElementList;
+    std::map<std::string, ViewerClientInformationElementList> geometryElementMap;
+
+    for(size_t x = 0; x < activeClients.size(); ++x)
+    {
+        const ViewerClientAttributes& clatts = activeClients[x]->GetViewerClientAttributes();
+
+        /// otherwise check if it needs transmission in
+        QString qdim = QString("%1x%2").arg(clatts.GetImageWidth())
+                .arg(clatts.GetImageHeight());
+
+        std::string dimensions = qdim.toStdString();
+
+        /// if this particular version already exists then skip it..
+        if(geometryElementMap.count(dimensions) > 0) continue;
+
+        //int timerId = visitTimer->StartTimer(true);
+        GetSerializedData(windowId,
+                          clatts.GetImageWidth(),
+                          clatts.GetImageHeight(),
+                          clatts.GetImageResolutionPcnt(),
+                          ViewerClientInformation::Image,
+                          geometryElementMap[dimensions]);
+    }
+
+    /// if no data to transmit then immediately return..
+    if(geometryElementMap.size() == 0) return;
+
+    ViewerClientInformation* qatts = GetViewerState()->GetViewerClientInformation();
+
+    /// I am clearing memory through the ClearVars() operations..
+    for(size_t i = 0; i < activeClients.size(); ++i)
+    {
+        ViewerClientAttributes& clatts = activeClients[i]->GetViewerClientAttributes();
+
+        QString qdim = QString("%1x%2").arg(clatts.GetImageWidth())
+                .arg(clatts.GetImageHeight());
+
+        std::string dimensions = qdim.toStdString();
+
+        if(geometryElementMap.count(dimensions) == 0) continue;
+
+        qatts->ClearVars();
+
+        ViewerClientInformationElementList& elementList = geometryElementMap[dimensions];
+        for(size_t k = 0; k < elementList.size(); ++k) {
+            qatts->AddVars(elementList[k]);
+        }
         activeClients[i]->BroadcastToClient(qatts);
     }
 
@@ -9783,8 +9683,6 @@ ViewerSubject::BroadcastToAllClients(void *data1, Subject *data2)
         AttributeSubject *subj = (AttributeSubject *)data2;
         for(size_t i = 0; i < This->clients.size(); ++i)
             This->clients[i]->BroadcastToClient(subj);
-
-        //This->BroadcastAdvanced(subj);
     }
 }
 

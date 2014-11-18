@@ -375,6 +375,7 @@ function build_vtk
     vopts="${vopts} -DModule_vtkFiltersHybrid:BOOL=true"
     vopts="${vopts} -DModule_vtkFiltersModeling:BOOL=true"
     vopts="${vopts} -DModule_vtkGeovisCore:BOOL=true"
+    vopts="${vopts} -DModule_vtkIOGeoJSON:BOOL=true"
     vopts="${vopts} -DModule_vtkIOEnSight:BOOL=true"
     vopts="${vopts} -DModule_vtkIOGeometry:BOOL=true"
     vopts="${vopts} -DModule_vtkIOLegacy:BOOL=true"

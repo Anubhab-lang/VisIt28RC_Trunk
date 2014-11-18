@@ -10600,5 +10600,5 @@ void ViewerWindowManager::SetBackendType(int newVal)
 
 void ViewerWindowManager::RenderEventCallback(void *data, bool inMotion) {
     int index = *((int*)data);
-    viewerSubject->BroadcastAdvanced(index,inMotion);
+    viewerSubject->BroadcastImage(index,inMotion);
 }

@@ -16138,14 +16138,17 @@ visit_exec_client_method(void *data)
             /// currently I want this separated from regular interpret logic
             if(code[i].find("raw:") == 0) {
                 std::string command = code[i].substr(4);
-
+                std::cout << "raw:\n" << command << std::endl;
                 std::ostringstream c;
                 c << "from cStringIO import StringIO\n";
                 c << "import sys\n";
                 c << "my_stdout = StringIO()\n";
                 c << "sys.stdout = my_stdout\n";
                 c << "sys.stderr = my_stdout\n";
-                c << "exec(u'" << command << "')\n"; /// remove the prefix
+                c << "try:\n"; /// remove the prefix
+                c << "  exec(u'" << command << "')\n"; /// remove the prefix
+                c << "except e:\n"; /// remove the prefix
+                c << " print e\n"; /// remove the prefix
                 c << "sys.stdout = sys.__stdout__\n";
                 c << "sys.stderr = sys.__stderr__\n";
                 c << "my_stdout_res = my_stdout.getvalue()\n";
@@ -16192,30 +16195,30 @@ visit_exec_client_method(void *data)
                     }
                 }
 
-                //std::cout << "x: " << result << " " << result.size() << std::endl;
+                std::cout << "x: " << result << " " << result.size() << std::endl;
 
-                if(result.size() > 0)
-                {
-                    //if(onNewThread)
-                    GetViewerProxy()->SetXferUpdate(true);
+//                if(result.size() > 0)
+//                {
+//                    //if(onNewThread)
+//                    GetViewerProxy()->SetXferUpdate(true);
 
-                    // We don't want to get here re-entrantly so disable the client
-                    // method observer temporarily.
-                    clientMethodObserver->SetUpdate(false);
+//                    // We don't want to get here re-entrantly so disable the client
+//                    // method observer temporarily.
+//                    clientMethodObserver->SetUpdate(false);
 
-                    stringVector args;
-                    args.push_back(result);
+//                    stringVector args;
+//                    args.push_back(result);
 
-                    ClientMethod *newM = GetViewerState()->GetClientMethod();
-                    newM->ClearArgs();
-                    newM->SetMethodName("AcceptRecordedMacro");
-                    newM->SetStringArgs(args);
-                    newM->Notify();
+//                    ClientMethod *newM = GetViewerState()->GetClientMethod();
+//                    newM->ClearArgs();
+//                    newM->SetMethodName("AcceptRecordedMacro");
+//                    newM->SetStringArgs(args);
+//                    newM->Notify();
 
-                    //if(onNewThread)
-                    GetViewerProxy()->SetXferUpdate(false);
+//                    //if(onNewThread)
+//                    GetViewerProxy()->SetXferUpdate(false);
 
-                }
+//                }
 
             }
             else {

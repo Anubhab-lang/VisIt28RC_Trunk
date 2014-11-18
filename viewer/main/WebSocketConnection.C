@@ -463,6 +463,7 @@ void QWsSocket::close( QString reason )
 
 void QWsSocket::tcpSocketAboutToClose()
 {
+    std::cout << "TCP Socket CLOSED!" << std::endl;
     emit aboutToClose();
 }
 
@@ -883,6 +884,7 @@ WebSocketConnection::closeConnection()
     QObject::disconnect(socket,SIGNAL(aboutToClose()),this, SLOT(closeConnection()));
     socket->close("closing the connection");
     socket->internalSocket()->close();
+    emit disconnected();
 }
 
 void
